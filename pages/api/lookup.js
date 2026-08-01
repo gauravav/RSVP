@@ -34,12 +34,19 @@ export default async function handler(req, res) {
 
     // Only what the form needs to repopulate itself — no id, no timestamps,
     // and no echo of the name or phone that was used to find it.
+    //
+    // Every event is returned, not just the ones this page asks about, so a
+    // guest editing from the marriage-only page still submits their existing
+    // haldi and mehendi answers back unchanged.
     return res.status(200).json({
       found: true,
       rsvp: {
-        attending: row.attending,
-        guestCount: row.guest_count,
         message: row.message || '',
+        responses: {
+          haldi: { attending: row.haldi_attending, guestCount: row.haldi_guest_count },
+          mehendi: { attending: row.mehendi_attending, guestCount: row.mehendi_guest_count },
+          marriage: { attending: row.attending, guestCount: row.guest_count },
+        },
       },
     });
   } catch (err) {

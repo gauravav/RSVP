@@ -47,38 +47,50 @@ gh repo create rsvp-app --private --source=. --push
 
 ## 5. Embed the form in your invitation page
 
-Use two different URLs — one per side — by adding a `?side=` query param.
-Everything else about the form is identical; only the stored `side` value
-(and a small badge on the form) changes.
+Two things vary by URL:
 
-**Bride's side:**
+- `?side=bride` / `?side=groom` — which side the response is filed under.
+- `?events=all` — ask about Haldi, Mehendi **and** Marriage. Leave it off and
+  the form asks about the Marriage only.
+
+That gives you four embeds. Bride's side needs two of them, one per page:
+
+**Bride's side — marriage only:**
 ```html
 <iframe
-  src="https://rsvp-app-yourname.vercel.app/embed?side=bride"
-  style="width: 100%; max-width: 480px; height: 620px; border: none;"
-  title="RSVP - Bride's Side"
+  src="https://rsvp-self.vercel.app/embed?side=bride"
+  style="width: 100%; max-width: 480px; height: 700px; border: none;"
+  title="RSVP"
 ></iframe>
 ```
 
-**Groom's side:**
+**Bride's side — all three ceremonies:**
 ```html
 <iframe
-  src="https://rsvp-app-yourname.vercel.app/embed?side=groom"
-  style="width: 100%; max-width: 480px; height: 620px; border: none;"
-  title="RSVP - Groom's Side"
+  src="https://rsvp-self.vercel.app/embed?side=bride&events=all"
+  style="width: 100%; max-width: 480px; height: 1000px; border: none;"
+  title="RSVP"
 ></iframe>
 ```
 
-Adjust `height` once you see how tall the form renders (guests field toggling
-on/off shifts it slightly). If your invitation page is on a platform that
-strips `<iframe>` tags (some website builders do), let me know which one and
-I'll figure out a workaround (usually a raw HTML/embed block does the trick).
+**Groom's side:** same two URLs with `side=groom`.
+
+Adjust `height` once you see how tall each renders — the three-ceremony form is
+noticeably taller, and both grow when a guest picks "yes" and the guest-count
+dropdown appears.
+
+A guest is identified by first name + last name + phone. Entering a combination
+that already responded loads their previous answers so they can edit and
+resubmit; that updates the same record rather than adding a second one.
+
+Answers are kept per ceremony, and a page only writes the ceremonies it asks
+about. Someone who RSVPs to all three and later resubmits from the marriage-only
+page keeps their haldi and mehendi answers intact.
 
 ## 6. View responses
 
-Go to `https://rsvp-app-yourname.vercel.app/admin`, enter your `ADMIN_PASSWORD`,
-and you'll see every RSVP with a live guest-count total and a CSV export
-button. Use the "Bride's Side" / "Groom's Side" filter pills at the top to
+Go to `https://rsvp-self.vercel.app/admin`, enter your `ADMIN_PASSWORD`, and
+you'll see every RSVP with a per-ceremony guest count and a CSV export button. Use the "Bride's Side" / "Groom's Side" filter pills at the top to
 narrow the table and stats to just one side — the export also respects
 whichever filter is currently selected.
 

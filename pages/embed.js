@@ -1,30 +1,43 @@
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/router';
 import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
 import { isBlankName } from '../lib/names';
+import { EVENTS, ATTENDING_OPTIONS, eventByKey, parseEventKeys } from '../lib/events';
 
-const EMPTY_FORM = {
-  attending: 'yes',
-  guestCount: 1,
-  message: '',
-};
+const BLANK_ANSWER = { attending: 'yes', guestCount: 1 };
 
-export default function Embed() {
-  const router = useRouter();
+// Resolved on the server rather than from router.query, which is empty during
+// the pages-router server render. Reading it client-side would paint the
+// marriage-only form first and then grow to three ceremonies after hydration —
+// a visible jump inside an iframe whose height the host page has already fixed.
+export function getServerSideProps({ query }) {
+  return {
+    props: {
+      side: query.side === 'bride' || query.side === 'groom' ? query.side : 'unspecified',
+      eventKeys: parseEventKeys(query.events),
+    },
+  };
+}
+
+export default function Embed({ side, eventKeys }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [countryIso, setCountryIso] = useState(DEFAULT_COUNTRY);
   const [number, setNumber] = useState('');
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [answers, setAnswers] = useState({});
+  const [message, setMessage] = useState('');
   const [status, setStatus] = useState('idle'); // idle | submitting | done | error
   const [errorMsg, setErrorMsg] = useState('');
   const [existing, setExisting] = useState(false); // did we find a prior RSVP?
   const [lookingUp, setLookingUp] = useState(false);
   const [wasUpdate, setWasUpdate] = useState(false);
 
-  // side comes from the URL: /embed?side=bride or /embed?side=groom
-  const rawSide = typeof router.query.side === 'string' ? router.query.side.toLowerCase() : '';
-  const side = rawSide === 'bride' || rawSide === 'groom' ? rawSide : 'unspecified';
+  function answerFor(key) {
+    return answers[key] || BLANK_ANSWER;
+  }
+
+  function setAnswer(key, patch) {
+    setAnswers((prev) => ({ ...prev, [key]: { ...answerFor(key), ...patch } }));
+  }
 
   const phone = normalizePhone(countryIso, number);
   const canLookUp = Boolean(phone) && !isBlankName(firstName) && !isBlankName(lastName);
@@ -53,11 +66,18 @@ export default function Embed() {
         // A slower earlier request must not overwrite a newer one's result.
         if (seq !== lookupSeq.current) return;
         if (data.found) {
-          setForm({
-            attending: data.rsvp.attending || 'yes',
-            guestCount: data.rsvp.guestCount || 1,
-            message: data.rsvp.message || '',
-          });
+          // Keep every event we get back, including ones this page doesn't
+          // show, so resubmitting here doesn't wipe the guest's other answers.
+          const restored = {};
+          for (const [key, value] of Object.entries(data.rsvp.responses || {})) {
+            if (!value || !value.attending) continue;
+            restored[key] = {
+              attending: value.attending,
+              guestCount: value.guestCount || 1,
+            };
+          }
+          setAnswers(restored);
+          setMessage(data.rsvp.message || '');
           setExisting(true);
         } else {
           setExisting(false);
@@ -72,10 +92,6 @@ export default function Embed() {
     return () => clearTimeout(timer);
   }, [canLookUp, countryIso, number, firstName, lastName]);
 
-  function update(field, value) {
-    setForm((f) => ({ ...f, [field]: value }));
-  }
-
   async function handleSubmit(e) {
     e.preventDefault();
     if (!phone) {
@@ -85,16 +101,28 @@ export default function Embed() {
     }
     setStatus('submitting');
     setErrorMsg('');
+
+    // Send this page's events, plus any others already on file so they survive
+    // the update untouched.
+    const responses = {};
+    for (const [key, value] of Object.entries(answers)) {
+      if (value && value.attending) responses[key] = value;
+    }
+    for (const key of eventKeys) {
+      responses[key] = answerFor(key);
+    }
+
     try {
       const res = await fetch('/api/rsvp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...form,
           firstName,
           lastName,
           countryCode: countryIso,
           number,
+          responses,
+          message,
           side,
         }),
       });
@@ -199,42 +227,55 @@ export default function Embed() {
           </p>
         )}
 
-        <label style={styles.label}>
-          Will you attend? *
-          <select
-            style={styles.input}
-            value={form.attending}
-            onChange={(e) => update('attending', e.target.value)}
-          >
-            <option value="yes">Yes, I'll be there</option>
-            <option value="no">Sorry, can't make it</option>
-            <option value="maybe">Not sure yet</option>
-          </select>
-        </label>
+        {eventKeys.map((key) => {
+          const event = eventByKey(key);
+          const answer = answerFor(key);
+          const multi = eventKeys.length > 1;
+          return (
+            <fieldset key={key} style={multi ? styles.eventBlock : styles.eventBlockPlain}>
+              {multi && <legend style={styles.eventLegend}>{event.label}</legend>}
 
-        {form.attending === 'yes' && (
-          <label style={styles.label}>
-            Number of guests (including you)
-            <select
-              style={styles.input}
-              value={form.guestCount}
-              onChange={(e) => update('guestCount', e.target.value)}
-            >
-              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+              <label style={styles.label}>
+                {multi ? 'Will you attend?' : 'Will you attend? *'}
+                <select
+                  style={styles.input}
+                  value={answer.attending}
+                  onChange={(e) => setAnswer(key, { attending: e.target.value })}
+                >
+                  {ATTENDING_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {answer.attending === 'yes' && (
+                <label style={{ ...styles.label, marginTop: 10 }}>
+                  Number of guests (including you)
+                  <select
+                    style={styles.input}
+                    value={answer.guestCount}
+                    onChange={(e) => setAnswer(key, { guestCount: Number(e.target.value) })}
+                  >
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </fieldset>
+          );
+        })}
 
         <label style={styles.label}>
           Message / dietary notes
           <textarea
             style={{ ...styles.input, minHeight: 70 }}
-            value={form.message}
-            onChange={(e) => update('message', e.target.value)}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
           />
         </label>
 
@@ -368,6 +409,23 @@ const styles = {
   },
   nameRow: { display: 'flex', gap: 8 },
   phoneRow: { display: 'flex', gap: 8 },
+  // Only drawn when more than one ceremony is on the page — a single event
+  // doesn't need a box around it.
+  eventBlock: {
+    margin: 0,
+    padding: '12px 14px 14px',
+    border: `1px solid ${COLORS.goldSoft}`,
+    borderRadius: 6,
+    background: 'rgba(255, 248, 232, 0.30)',
+  },
+  eventBlockPlain: { margin: 0, padding: 0, border: 'none' },
+  eventLegend: {
+    padding: '0 6px',
+    fontSize: 15,
+    letterSpacing: '0.10em',
+    textTransform: 'uppercase',
+    color: COLORS.ink,
+  },
   countrySelect: {
     fontFamily: SERIF,
     fontSize: 15,

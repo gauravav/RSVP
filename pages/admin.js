@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
+import { EVENTS } from '../lib/events';
 
 export default function Admin() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -45,14 +46,22 @@ export default function Admin() {
   const filteredRsvps = sideFilter === 'all' ? rsvps : rsvps.filter((r) => r.side === sideFilter);
 
   function exportCsv() {
-    const headers = ['First Name', 'Last Name', 'Phone', 'Side', 'Attending', 'Guests', 'Message', 'Submitted At', 'Last Updated'];
+    const headers = [
+      'First Name',
+      'Last Name',
+      'Phone',
+      'Side',
+      ...EVENTS.flatMap((e) => [`${e.label} Attending`, `${e.label} Guests`]),
+      'Message',
+      'Submitted At',
+      'Last Updated',
+    ];
     const rows = filteredRsvps.map((r) => [
       r.first_name || r.name || '',
       r.last_name || '',
       r.phone || '',
       r.side,
-      r.attending,
-      r.guest_count,
+      ...EVENTS.flatMap((e) => [r[e.attendingCol] || '', r[e.guestsCol] ?? '']),
       (r.message || '').replace(/\n/g, ' '),
       new Date(r.created_at).toLocaleString(),
       r.updated_at ? new Date(r.updated_at).toLocaleString() : '',
@@ -88,9 +97,18 @@ export default function Admin() {
     );
   }
 
-  const totalGuests = filteredRsvps
-    .filter((r) => r.attending === 'yes')
-    .reduce((sum, r) => sum + (r.guest_count || 0), 0);
+  // Head count is per ceremony now — haldi and the marriage can draw very
+  // different numbers, so a single total would hide the thing you're planning
+  // against.
+  const eventTotals = EVENTS.map((e) => {
+    const attending = filteredRsvps.filter((r) => r[e.attendingCol] === 'yes');
+    return {
+      key: e.key,
+      label: e.label,
+      responses: attending.length,
+      guests: attending.reduce((sum, r) => sum + (r[e.guestsCol] || 0), 0),
+    };
+  });
 
   const brideCount = rsvps.filter((r) => r.side === 'bride').length;
   const groomCount = rsvps.filter((r) => r.side === 'groom').length;
@@ -128,14 +146,16 @@ export default function Admin() {
           <div style={styles.statNum}>{filteredRsvps.length}</div>
           <div style={styles.statLabel}>Responses</div>
         </div>
-        <div style={styles.statCard}>
-          <div style={styles.statNum}>{filteredRsvps.filter((r) => r.attending === 'yes').length}</div>
-          <div style={styles.statLabel}>Attending</div>
-        </div>
-        <div style={styles.statCard}>
-          <div style={styles.statNum}>{totalGuests}</div>
-          <div style={styles.statLabel}>Total Guests</div>
-        </div>
+        {eventTotals.map((t) => (
+          <div key={t.key} style={styles.statCard}>
+            <div style={styles.statNum}>{t.guests}</div>
+            <div style={styles.statLabel}>
+              {t.label} guests
+              <br />
+              <span style={styles.statSub}>{t.responses} saying yes</span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {loading ? (
@@ -149,8 +169,11 @@ export default function Admin() {
                 <th style={styles.th}>Last Name</th>
                 <th style={styles.th}>Phone</th>
                 <th style={styles.th}>Side</th>
-                <th style={styles.th}>Attending</th>
-                <th style={styles.th}>Guests</th>
+                {EVENTS.map((e) => (
+                  <th key={e.key} style={styles.th} colSpan={2}>
+                    {e.label}
+                  </th>
+                ))}
                 <th style={styles.th}>Message</th>
                 <th style={styles.th}>Submitted</th>
                 <th style={styles.th}>Updated</th>
@@ -163,8 +186,16 @@ export default function Admin() {
                   <td style={styles.td}>{r.last_name || '—'}</td>
                   <td style={styles.td}>{r.phone || '—'}</td>
                   <td style={styles.td}>{r.side === 'bride' ? "Bride" : r.side === 'groom' ? "Groom" : '—'}</td>
-                  <td style={styles.td}>{r.attending}</td>
-                  <td style={styles.td}>{r.guest_count}</td>
+                  {EVENTS.map((e) => (
+                    <Fragment key={e.key}>
+                      {/* Blank rather than "no" when the guest was never asked
+                          about this ceremony — those aren't the same answer. */}
+                      <td style={styles.td}>{r[e.attendingCol] || '—'}</td>
+                      <td style={styles.tdGuests}>
+                        {r[e.attendingCol] === 'yes' ? r[e.guestsCol] ?? '—' : ''}
+                      </td>
+                    </Fragment>
+                  ))}
                   <td style={styles.td}>{r.message}</td>
                   <td style={styles.td}>{new Date(r.created_at).toLocaleString()}</td>
                   <td style={styles.td}>{r.updated_at ? new Date(r.updated_at).toLocaleString() : '—'}</td>
@@ -232,4 +263,6 @@ const styles = {
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 14 },
   th: { textAlign: 'left', borderBottom: '2px solid #ddd', padding: '8px 10px' },
   td: { borderBottom: '1px solid #eee', padding: '8px 10px' },
+  tdGuests: { borderBottom: '1px solid #eee', padding: '8px 10px', color: '#666', fontVariantNumeric: 'tabular-nums' },
+  statSub: { fontSize: 11, color: '#999' },
 };

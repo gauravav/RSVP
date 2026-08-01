@@ -2,18 +2,15 @@ import { upsertRsvp, listRsvps } from '../../lib/db';
 import { isValidAdminCookie, parseCookies } from '../../lib/auth';
 import { normalizePhone } from '../../lib/countries';
 import { isBlankName } from '../../lib/names';
+import { EVENT_KEYS, isValidAttending } from '../../lib/events';
 
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     try {
-      const { firstName, lastName, countryCode, number, attending, guestCount, message, side } =
-        req.body || {};
+      const { firstName, lastName, countryCode, number, responses, message, side } = req.body || {};
 
       if (isBlankName(firstName) || isBlankName(lastName)) {
         return res.status(400).json({ error: 'First and last name are required.' });
-      }
-      if (!attending) {
-        return res.status(400).json({ error: 'Attending status is required.' });
       }
 
       // Phone is what a returning guest is matched on, so it has to be valid.
@@ -22,8 +19,27 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Please enter a valid phone number.' });
       }
 
-      const rawGuestCount = Number(guestCount) || 1;
-      const parsedGuestCount = Math.min(10, Math.max(1, Math.round(rawGuestCount)));
+      // Keep only events we recognise, so an edited request can't write to a
+      // column the form never offered.
+      const cleanResponses = {};
+      for (const key of EVENT_KEYS) {
+        const given = responses && responses[key];
+        if (!given) continue;
+        if (!isValidAttending(given.attending)) {
+          return res.status(400).json({ error: `Please choose an answer for each event.` });
+        }
+        const raw = Number(given.guestCount) || 1;
+        cleanResponses[key] = {
+          attending: given.attending,
+          // Guest count only means anything for an event they're attending.
+          guestCount: given.attending === 'yes' ? Math.min(10, Math.max(1, Math.round(raw))) : null,
+        };
+      }
+
+      if (Object.keys(cleanResponses).length === 0) {
+        return res.status(400).json({ error: 'Please answer at least one event.' });
+      }
+
       const allowedSides = ['bride', 'groom'];
       const parsedSide = allowedSides.includes(side) ? side : 'unspecified';
 
@@ -32,8 +48,7 @@ export default async function handler(req, res) {
         lastName: String(lastName).trim(),
         phone,
         countryCode: String(countryCode),
-        attending: String(attending),
-        guestCount: parsedGuestCount,
+        responses: cleanResponses,
         message: message ? String(message).trim() : null,
         side: parsedSide,
       });
