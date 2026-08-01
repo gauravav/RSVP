@@ -84,7 +84,7 @@ That gives you four embeds. Bride's side needs two of them, one per page:
 ```html
 <iframe
   src="https://rsvp-self.vercel.app/embed?side=bride"
-  style="width: 100%; max-width: 480px; height: 700px; border: none;"
+  style="width: 100%; max-width: 460px; height: 600px; border: none;"
   title="RSVP"
 ></iframe>
 ```
@@ -93,16 +93,18 @@ That gives you four embeds. Bride's side needs two of them, one per page:
 ```html
 <iframe
   src="https://rsvp-self.vercel.app/embed?side=bride&events=all"
-  style="width: 100%; max-width: 480px; height: 1000px; border: none;"
+  style="width: 100%; max-width: 460px; height: 600px; border: none;"
   title="RSVP"
 ></iframe>
 ```
 
 **Groom's side:** same two URLs with `side=groom`.
 
-Adjust `height` once you see how tall each renders — the three-ceremony form is
-noticeably taller, and both grow when a guest picks "yes" and the guest-count
-dropdown appears.
+**Both embeds are the same fixed size**, whichever ceremonies they ask about.
+The form is paged — who you are, then one page per ceremony, then message and
+submit — so the box never grows and the iframe height never needs revisiting.
+Change `FRAME_WIDTH` / `FRAME_HEIGHT` at the top of `pages/embed.js` if you want
+a different size, and update the iframe to match.
 
 A guest is identified by first name + last name + phone. Entering a combination
 that already responded loads their previous answers so they can edit and

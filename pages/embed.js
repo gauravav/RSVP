@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
 import { isBlankName } from '../lib/names';
-import { EVENTS, ATTENDING_OPTIONS, eventByKey, parseEventKeys } from '../lib/events';
+import { ATTENDING_OPTIONS, eventByKey, parseEventKeys } from '../lib/events';
 import { turnstileSiteKey } from '../lib/turnstile';
 
 const BLANK_ANSWER = { attending: 'yes', guestCount: 1 };
 
+// The whole embed is a fixed box so the host page can set an iframe height once
+// and never see it jump. Content is paged rather than stacked to fit inside it.
+const FRAME_WIDTH = 420;
+const FRAME_HEIGHT = 560;
+
 // Resolved on the server rather than from router.query, which is empty during
-// the pages-router server render. Reading it client-side would paint the
-// marriage-only form first and then grow to three ceremonies after hydration —
-// a visible jump inside an iframe whose height the host page has already fixed.
+// the pages-router server render. Reading it client-side would paint the wrong
+// step count first and correct it after hydration.
 export function getServerSideProps({ query }) {
   return {
     props: {
@@ -35,77 +39,19 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   const [wasUpdate, setWasUpdate] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [website, setWebsite] = useState(''); // honeypot; real guests never see it
+  const [stepIndex, setStepIndex] = useState(0);
   const turnstileRef = useRef(null);
   const turnstileWidget = useRef(null);
-  const showForm = status !== 'done';
 
-  // Cloudflare's script is loaded in explicit mode and the widget rendered by
-  // hand, so it can be reset after a failed submit — a token is single-use, and
-  // reusing one turns a retry into a rejection.
-  useEffect(() => {
-    if (!siteKey) return undefined;
+  // who you are -> one page per ceremony -> message, bot check and submit
+  const steps = ['identity', ...eventKeys, 'final'];
+  const currentStep = steps[stepIndex];
+  const isFinalStep = currentStep === 'final';
+  const totalSteps = steps.length;
 
-    let cancelled = false;
-    function renderWidget() {
-      if (cancelled || !window.turnstile || !turnstileRef.current) return;
-      if (turnstileWidget.current !== null) return;
-      turnstileWidget.current = window.turnstile.render(turnstileRef.current, {
-        sitekey: siteKey,
-        callback: setTurnstileToken,
-        'expired-callback': () => setTurnstileToken(''),
-        'error-callback': () => setTurnstileToken(''),
-      });
-    }
-
-    if (window.turnstile) {
-      renderWidget();
-    } else {
-      const existingScript = document.querySelector('script[data-turnstile]');
-      if (existingScript) {
-        existingScript.addEventListener('load', renderWidget);
-      } else {
-        const script = document.createElement('script');
-        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-        script.async = true;
-        script.defer = true;
-        script.dataset.turnstile = 'true';
-        script.addEventListener('load', renderWidget);
-        document.head.appendChild(script);
-      }
-    }
-
-    return () => {
-      cancelled = true;
-      // The thank-you screen unmounts the form and with it the widget's node.
-      // Without clearing the id here, coming back via "Edit my RSVP" would see
-      // a stale id, skip rendering, and leave the guest with no token.
-      if (window.turnstile && turnstileWidget.current !== null) {
-        // Throws if the widget is already gone, and an exception escaping a
-        // cleanup function takes the unmount down with it.
-        try {
-          window.turnstile.remove(turnstileWidget.current);
-        } catch {
-          // Already removed; nothing to do.
-        }
-      }
-      turnstileWidget.current = null;
-      setTurnstileToken('');
-    };
-    // Keyed on whether the form is on screen, not on `status` — re-running for
-    // every idle/submitting/error transition would rebuild the widget mid-flow
-    // and throw away a token the guest already solved for.
-  }, [siteKey, showForm]);
-
-  function resetTurnstile() {
-    setTurnstileToken('');
-    if (window.turnstile && turnstileWidget.current !== null) {
-      try {
-        window.turnstile.reset(turnstileWidget.current);
-      } catch {
-        // Widget went away mid-flight; the guest can reload if it matters.
-      }
-    }
-  }
+  const phone = normalizePhone(countryIso, number);
+  const identityComplete =
+    Boolean(phone) && !isBlankName(firstName) && !isBlankName(lastName);
 
   function answerFor(key) {
     return answers[key] || BLANK_ANSWER;
@@ -115,17 +61,14 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
     setAnswers((prev) => ({ ...prev, [key]: { ...answerFor(key), ...patch } }));
   }
 
-  const phone = normalizePhone(countryIso, number);
-  const canLookUp = Boolean(phone) && !isBlankName(firstName) && !isBlankName(lastName);
-
-  // Once name and number are both filled in, check whether this guest already
-  // has an RSVP and prefill their previous answers. Debounced so we aren't
-  // firing a request on every keystroke.
+  // Once name and number are filled in, check whether this guest already has an
+  // RSVP and prefill their previous answers. Debounced so we aren't firing a
+  // request on every keystroke.
   const lookupSeq = useRef(0);
   useEffect(() => {
-    if (!canLookUp) {
+    if (!identityComplete) {
       setExisting(false);
-      return;
+      return undefined;
     }
     const seq = ++lookupSeq.current;
     setLookingUp(true);
@@ -166,10 +109,99 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [canLookUp, countryIso, number, firstName, lastName]);
+  }, [identityComplete, countryIso, number, firstName, lastName]);
+
+  // The widget is mounted only on the final step, so it's rendered by hand in
+  // explicit mode rather than auto-rendered on page load. Rendering it by hand
+  // also means it can be reset after a failed submit — a token is single-use,
+  // and reusing one turns a retry into a rejection.
+  const showTurnstile = siteKey && isFinalStep && status !== 'done';
+  useEffect(() => {
+    if (!showTurnstile) return undefined;
+
+    let cancelled = false;
+    function renderWidget() {
+      if (cancelled || !window.turnstile || !turnstileRef.current) return;
+      if (turnstileWidget.current !== null) return;
+      turnstileWidget.current = window.turnstile.render(turnstileRef.current, {
+        sitekey: siteKey,
+        callback: setTurnstileToken,
+        'expired-callback': () => setTurnstileToken(''),
+        'error-callback': () => setTurnstileToken(''),
+      });
+    }
+
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      const existingScript = document.querySelector('script[data-turnstile]');
+      if (existingScript) {
+        existingScript.addEventListener('load', renderWidget);
+      } else {
+        const script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.async = true;
+        script.defer = true;
+        script.dataset.turnstile = 'true';
+        script.addEventListener('load', renderWidget);
+        document.head.appendChild(script);
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      // Stepping back unmounts the widget's node. Without clearing the id here,
+      // returning to this step would see a stale id, skip rendering, and leave
+      // the guest with no token and a permanently disabled submit button.
+      if (window.turnstile && turnstileWidget.current !== null) {
+        // Throws if the widget is already gone, and an exception escaping a
+        // cleanup function takes the unmount down with it.
+        try {
+          window.turnstile.remove(turnstileWidget.current);
+        } catch {
+          // Already removed; nothing to do.
+        }
+      }
+      turnstileWidget.current = null;
+      setTurnstileToken('');
+    };
+  }, [showTurnstile, siteKey]);
+
+  function resetTurnstile() {
+    setTurnstileToken('');
+    if (window.turnstile && turnstileWidget.current !== null) {
+      try {
+        window.turnstile.reset(turnstileWidget.current);
+      } catch {
+        // Widget went away mid-flight; the guest can reload if it matters.
+      }
+    }
+  }
+
+  const canAdvance = currentStep === 'identity' ? identityComplete : true;
+  const canSubmit = status !== 'submitting' && (!siteKey || Boolean(turnstileToken));
+
+  function goNext() {
+    if (!canAdvance) return;
+    setErrorMsg('');
+    setStepIndex((i) => Math.min(i + 1, totalSteps - 1));
+  }
+
+  function goBack() {
+    setErrorMsg('');
+    setStepIndex((i) => Math.max(i - 1, 0));
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
+
+    // Enter inside a text field submits the form. On any step but the last that
+    // should move the guest forward, not send a half-filled RSVP.
+    if (!isFinalStep) {
+      goNext();
+      return;
+    }
+
     if (!phone) {
       setStatus('error');
       setErrorMsg('Please enter a valid phone number.');
@@ -221,20 +253,26 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
     return (
       <div style={styles.wrap}>
         <GlobalStyle />
-        <div style={styles.card}>
-          <h2 style={styles.heading}>Thank you!</h2>
-          <p style={styles.sub}>
-            {wasUpdate
-              ? 'Your RSVP has been updated.'
-              : 'Your RSVP has been recorded.'}
-          </p>
-          <p style={styles.hint}>
-            Need to change something? Come back to this form and enter the same
-            name and phone number — your answers will load and you can resubmit.
-          </p>
-          <button style={styles.secondaryButton} onClick={() => setStatus('idle')}>
-            Edit my RSVP
-          </button>
+        <div style={styles.frame}>
+          <div style={styles.doneBody}>
+            <h2 style={styles.heading}>Thank you</h2>
+            <p style={styles.sub}>
+              {wasUpdate ? 'Your RSVP has been updated.' : 'Your RSVP has been recorded.'}
+            </p>
+            <p style={styles.hint}>
+              Need to change something? Come back to this form and enter the same
+              name and phone number — your answers will load and you can resubmit.
+            </p>
+            <button
+              style={styles.secondaryButton}
+              onClick={() => {
+                setStatus('idle');
+                setStepIndex(0);
+              }}
+            >
+              Edit my RSVP
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -243,84 +281,92 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   return (
     <div style={styles.wrap}>
       <GlobalStyle />
-      <form style={styles.card} onSubmit={handleSubmit}>
-        {/* The side still rides along on the submission and drives the admin
-            filters — it just isn't shown to the guest. */}
-        <h2 style={styles.heading}>RSVP</h2>
-
-        <div style={styles.nameRow}>
-          <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
-            First name *
-            <input
-              style={styles.input}
-              required
-              autoComplete="given-name"
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-            />
-          </label>
-          <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
-            Last name *
-            <input
-              style={styles.input}
-              required
-              autoComplete="family-name"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-            />
-          </label>
+      <form style={styles.frame} onSubmit={handleSubmit}>
+        <div style={styles.header}>
+          <h2 style={styles.heading}>RSVP</h2>
+          <div style={styles.dots}>
+            {steps.map((s, i) => (
+              <span key={s} style={i === stepIndex ? styles.dotActive : styles.dot} />
+            ))}
+          </div>
         </div>
 
-        <label style={styles.label}>
-          Phone *
-          <div style={styles.phoneRow}>
-            <select
-              style={styles.countrySelect}
-              value={countryIso}
-              onChange={(e) => setCountryIso(e.target.value)}
-              aria-label="Country code"
-            >
-              {COUNTRIES.map((c) => (
-                <option key={c.iso} value={c.iso}>
-                  {c.flag} {c.dial}
-                </option>
-              ))}
-            </select>
-            <input
-              type="tel"
-              inputMode="tel"
-              placeholder="Phone number"
-              style={{ ...styles.input, flex: 1, minWidth: 0 }}
-              required
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-            />
-          </div>
-        </label>
+        {/* Fixed-height scroll region: the frame stays the same size whatever
+            step is showing, so the host iframe never has to resize. */}
+        <div style={styles.body}>
+          {currentStep === 'identity' && (
+            <>
+              <div style={styles.nameRow}>
+                <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
+                  First name *
+                  <input
+                    style={styles.input}
+                    required
+                    autoComplete="given-name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                </label>
+                <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
+                  Last name *
+                  <input
+                    style={styles.input}
+                    required
+                    autoComplete="family-name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </label>
+              </div>
 
-        {lookingUp && <p style={styles.hint}>Checking for an existing RSVP…</p>}
+              <label style={{ ...styles.label, marginTop: 12 }}>
+                Phone *
+                <div style={styles.phoneRow}>
+                  <select
+                    style={styles.countrySelect}
+                    value={countryIso}
+                    onChange={(e) => setCountryIso(e.target.value)}
+                    aria-label="Country code"
+                  >
+                    {COUNTRIES.map((c) => (
+                      <option key={c.iso} value={c.iso}>
+                        {c.flag} {c.dial}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="Phone number"
+                    style={{ ...styles.input, flex: 1, minWidth: 0 }}
+                    required
+                    value={number}
+                    onChange={(e) => setNumber(e.target.value)}
+                  />
+                </div>
+              </label>
 
-        {existing && !lookingUp && (
-          <p style={styles.foundNote}>
-            Welcome back, {firstName.trim()} — we found your earlier RSVP and
-            filled it in below. Make any changes and submit again to update it.
-          </p>
-        )}
+              {lookingUp && <p style={styles.hint}>Checking for an existing RSVP…</p>}
 
-        {eventKeys.map((key) => {
-          const event = eventByKey(key);
-          const answer = answerFor(key);
-          const multi = eventKeys.length > 1;
-          return (
-            <div key={key} style={multi ? styles.eventBlock : styles.eventBlockPlain}>
-              {multi && <div style={styles.eventLegend}>{event.label}</div>}
+              {existing && !lookingUp && (
+                <p style={styles.foundNote}>
+                  Welcome back, {firstName.trim()} — we found your earlier RSVP.
+                  Your answers are filled in; change anything you like.
+                </p>
+              )}
+            </>
+          )}
+
+          {currentStep !== 'identity' && !isFinalStep && (
+            <>
+              <div style={styles.stepTitle}>{eventByKey(currentStep).label}</div>
 
               <label style={styles.label}>
-                {multi ? 'Will you attend?' : 'Will you attend? *'}
+                Will you attend?
                 <select
                   style={styles.input}
-                  value={answer.attending}
-                  onChange={(e) => setAnswer(key, { attending: e.target.value })}
+                  value={answerFor(currentStep).attending}
+                  onChange={(e) => setAnswer(currentStep, { attending: e.target.value })}
                 >
                   {ATTENDING_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -330,13 +376,15 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
                 </select>
               </label>
 
-              {answer.attending === 'yes' && (
-                <label style={{ ...styles.label, marginTop: 10 }}>
+              {answerFor(currentStep).attending === 'yes' && (
+                <label style={{ ...styles.label, marginTop: 12 }}>
                   Number of guests (including you)
                   <select
                     style={styles.input}
-                    value={answer.guestCount}
-                    onChange={(e) => setAnswer(key, { guestCount: Number(e.target.value) })}
+                    value={answerFor(currentStep).guestCount}
+                    onChange={(e) =>
+                      setAnswer(currentStep, { guestCount: Number(e.target.value) })
+                    }
                   >
                     {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
                       <option key={n} value={n}>
@@ -346,49 +394,72 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
                   </select>
                 </label>
               )}
-            </div>
-          );
-        })}
+            </>
+          )}
 
-        <label style={styles.label}>
-          Message / dietary notes
-          <textarea
-            style={{ ...styles.input, minHeight: 70 }}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-          />
-        </label>
+          {isFinalStep && (
+            <>
+              <label style={styles.label}>
+                Message / dietary notes
+                <textarea
+                  style={{ ...styles.input, minHeight: 90 }}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                />
+              </label>
 
-        {/* Honeypot. Hidden from guests and from screen readers, skipped by
-            tabbing, and never autofilled — anything in it came from a bot. */}
-        <div style={styles.honeypot} aria-hidden="true">
-          <label>
-            Website
-            <input
-              type="text"
-              tabIndex={-1}
-              autoComplete="off"
-              value={website}
-              onChange={(e) => setWebsite(e.target.value)}
-            />
-          </label>
+              {/* Honeypot. Hidden from guests and from screen readers, skipped
+                  by tabbing, and never autofilled — anything in it is a bot. */}
+              <div style={styles.honeypot} aria-hidden="true">
+                <label>
+                  Website
+                  <input
+                    type="text"
+                    tabIndex={-1}
+                    autoComplete="off"
+                    value={website}
+                    onChange={(e) => setWebsite(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              {siteKey && <div ref={turnstileRef} style={styles.turnstile} />}
+            </>
+          )}
         </div>
 
-        {siteKey && <div ref={turnstileRef} style={styles.turnstile} />}
+        <div style={styles.footer}>
+          {errorMsg && <p style={styles.error}>{errorMsg}</p>}
 
-        {status === 'error' && <p style={styles.error}>{errorMsg}</p>}
+          <div style={styles.navRow}>
+            {stepIndex > 0 ? (
+              <button type="button" style={styles.secondaryButton} onClick={goBack}>
+                Back
+              </button>
+            ) : (
+              <span />
+            )}
 
-        <button
-          style={styles.button}
-          type="submit"
-          disabled={status === 'submitting' || (Boolean(siteKey) && !turnstileToken)}
-        >
-          {status === 'submitting'
-            ? 'Submitting…'
-            : existing
-            ? 'Update RSVP'
-            : 'Submit RSVP'}
-        </button>
+            {isFinalStep ? (
+              <button style={styles.button} type="submit" disabled={!canSubmit}>
+                {status === 'submitting'
+                  ? 'Submitting…'
+                  : existing
+                  ? 'Update RSVP'
+                  : 'Submit RSVP'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                style={styles.button}
+                onClick={goNext}
+                disabled={!canAdvance}
+              >
+                Next
+              </button>
+            )}
+          </div>
+        </div>
       </form>
     </div>
   );
@@ -425,8 +496,13 @@ function GlobalStyle() {
         outline-offset: 1px;
       }
       button:disabled {
-        opacity: 0.6;
+        opacity: 0.45;
         cursor: default;
+      }
+      /* Centre Cloudflare's widget, which renders as a fixed-width iframe. */
+      .cf-turnstile iframe {
+        margin: 0 auto;
+        display: block;
       }
     `}</style>
   );
@@ -444,7 +520,8 @@ const COLORS = {
   cream: '#f7ecd5',
 };
 
-const SERIF = "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif";
+const SERIF =
+  "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif";
 
 const styles = {
   wrap: {
@@ -452,34 +529,83 @@ const styles = {
     color: COLORS.ink,
     display: 'flex',
     justifyContent: 'center',
-    padding: '20px 16px',
-    // Layered warm tones approximate the invitation's aged-wood wash without
-    // needing an image asset.
+    alignItems: 'flex-start',
+    padding: 16,
+    boxSizing: 'border-box',
     background: `
       radial-gradient(ellipse at 50% 0%, rgba(226, 178, 84, 0.55), transparent 60%),
       radial-gradient(ellipse at 20% 90%, rgba(150, 102, 30, 0.35), transparent 55%),
       linear-gradient(165deg, #d3a03c 0%, #c28f30 45%, #a97a27 100%)
     `,
-    minHeight: '100%',
+    minHeight: '100vh',
   },
-  card: {
+  // Fixed in both directions. Steps swap inside it, so the box never resizes
+  // and the host page's iframe height stays correct all the way through.
+  frame: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: FRAME_WIDTH,
+    height: FRAME_HEIGHT,
     display: 'flex',
     flexDirection: 'column',
+    boxSizing: 'border-box',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingBottom: 10,
+    borderBottom: `1px solid ${COLORS.goldSoft}`,
+  },
+  body: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    padding: '16px 2px 8px',
+  },
+  doneBody: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
     gap: 12,
   },
+  footer: {
+    paddingTop: 12,
+    borderTop: `1px solid ${COLORS.goldSoft}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  navRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  dots: { display: 'flex', gap: 6, flexShrink: 0 },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: '50%',
+    background: 'rgba(36, 26, 11, 0.25)',
+  },
+  dotActive: { width: 7, height: 7, borderRadius: '50%', background: COLORS.ink },
   heading: {
     margin: 0,
-    fontSize: 30,
+    fontSize: 26,
     fontWeight: 400,
     letterSpacing: '0.06em',
     color: COLORS.ink,
   },
+  stepTitle: {
+    margin: '0 0 14px',
+    paddingBottom: 8,
+    borderBottom: `1px solid ${COLORS.goldSoft}`,
+    fontSize: 17,
+    letterSpacing: '0.10em',
+    textTransform: 'uppercase',
+    color: COLORS.ink,
+  },
   sub: { margin: 0, color: COLORS.inkSoft, fontSize: 16 },
-  hint: { margin: 0, fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' },
+  hint: { margin: '10px 0 0', fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' },
   foundNote: {
-    margin: 0,
+    margin: '12px 0 0',
     fontSize: 13,
     padding: '9px 12px',
     borderRadius: 6,
@@ -498,27 +624,6 @@ const styles = {
   },
   nameRow: { display: 'flex', gap: 8 },
   phoneRow: { display: 'flex', gap: 8 },
-  // Only drawn when more than one ceremony is on the page — a single event
-  // doesn't need a box around it.
-  eventBlock: {
-    margin: 0,
-    padding: '14px 14px 16px',
-    border: `1px solid ${COLORS.goldSoft}`,
-    borderRadius: 6,
-    background: 'rgba(255, 248, 232, 0.30)',
-  },
-  eventBlockPlain: { margin: 0, padding: 0, border: 'none' },
-  // A plain heading rather than a <legend>, which browsers draw straddling the
-  // fieldset border and which no amount of padding reliably reseats.
-  eventLegend: {
-    margin: '0 0 10px',
-    paddingBottom: 8,
-    borderBottom: `1px solid ${COLORS.goldSoft}`,
-    fontSize: 15,
-    letterSpacing: '0.10em',
-    textTransform: 'uppercase',
-    color: COLORS.ink,
-  },
   countrySelect: {
     fontFamily: SERIF,
     fontSize: 15,
@@ -539,11 +644,12 @@ const styles = {
     background: COLORS.parchment,
     color: COLORS.ink,
     fontWeight: 400,
+    boxSizing: 'border-box',
+    width: '100%',
   },
   button: {
     fontFamily: SERIF,
-    marginTop: 10,
-    padding: '11px 16px',
+    padding: '10px 22px',
     borderRadius: 6,
     border: 'none',
     background: COLORS.ink,
@@ -554,9 +660,7 @@ const styles = {
   },
   secondaryButton: {
     fontFamily: SERIF,
-    marginTop: 4,
-    alignSelf: 'flex-start',
-    padding: '9px 15px',
+    padding: '9px 18px',
     borderRadius: 6,
     border: `1px solid ${COLORS.ink}`,
     background: 'transparent',
@@ -575,5 +679,10 @@ const styles = {
     height: 1,
     overflow: 'hidden',
   },
-  turnstile: { marginTop: 4, minHeight: 65 },
+  turnstile: {
+    marginTop: 14,
+    minHeight: 65,
+    display: 'flex',
+    justifyContent: 'center',
+  },
 };
