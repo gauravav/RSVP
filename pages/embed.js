@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
+import { isBlankName } from '../lib/names';
 
 const EMPTY_FORM = {
-  name: '',
   attending: 'yes',
   guestCount: 1,
   message: '',
@@ -11,6 +11,8 @@ const EMPTY_FORM = {
 
 export default function Embed() {
   const router = useRouter();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [countryIso, setCountryIso] = useState(DEFAULT_COUNTRY);
   const [number, setNumber] = useState('');
   const [form, setForm] = useState(EMPTY_FORM);
@@ -25,13 +27,14 @@ export default function Embed() {
   const side = rawSide === 'bride' || rawSide === 'groom' ? rawSide : 'unspecified';
 
   const phone = normalizePhone(countryIso, number);
+  const canLookUp = Boolean(phone) && !isBlankName(firstName) && !isBlankName(lastName);
 
-  // Look the guest up once they've typed a plausible number, and prefill the
-  // rest of the form with whatever they submitted last time. Debounced so we
-  // aren't firing a request on every keystroke.
+  // Once name and number are both filled in, check whether this guest already
+  // has an RSVP and prefill their previous answers. Debounced so we aren't
+  // firing a request on every keystroke.
   const lookupSeq = useRef(0);
   useEffect(() => {
-    if (!phone) {
+    if (!canLookUp) {
       setExisting(false);
       return;
     }
@@ -39,15 +42,18 @@ export default function Embed() {
     setLookingUp(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `/api/lookup?countryCode=${encodeURIComponent(countryIso)}&number=${encodeURIComponent(number)}`
-        );
+        const params = new URLSearchParams({
+          countryCode: countryIso,
+          number,
+          firstName,
+          lastName,
+        });
+        const res = await fetch(`/api/lookup?${params}`);
         const data = await res.json();
         // A slower earlier request must not overwrite a newer one's result.
         if (seq !== lookupSeq.current) return;
         if (data.found) {
           setForm({
-            name: data.rsvp.name || '',
             attending: data.rsvp.attending || 'yes',
             guestCount: data.rsvp.guestCount || 1,
             message: data.rsvp.message || '',
@@ -64,7 +70,7 @@ export default function Embed() {
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [phone, countryIso, number]);
+  }, [canLookUp, countryIso, number, firstName, lastName]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -83,7 +89,14 @@ export default function Embed() {
       const res = await fetch('/api/rsvp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, countryCode: countryIso, number, side }),
+        body: JSON.stringify({
+          ...form,
+          firstName,
+          lastName,
+          countryCode: countryIso,
+          number,
+          side,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to submit');
@@ -98,8 +111,9 @@ export default function Embed() {
   if (status === 'done') {
     return (
       <div style={styles.wrap}>
+        <GlobalStyle />
         <div style={styles.card}>
-          <h2 style={styles.heading}>Thank you! 🎉</h2>
+          <h2 style={styles.heading}>Thank you!</h2>
           <p style={styles.sub}>
             {wasUpdate
               ? 'Your RSVP has been updated.'
@@ -107,7 +121,7 @@ export default function Embed() {
           </p>
           <p style={styles.hint}>
             Need to change something? Come back to this form and enter the same
-            phone number — your answers will load and you can resubmit.
+            name and phone number — your answers will load and you can resubmit.
           </p>
           <button style={styles.secondaryButton} onClick={() => setStatus('idle')}>
             Edit my RSVP
@@ -119,11 +133,35 @@ export default function Embed() {
 
   return (
     <div style={styles.wrap}>
+      <GlobalStyle />
       <form style={styles.card} onSubmit={handleSubmit}>
         {side !== 'unspecified' && (
           <span style={styles.badge}>{side === 'bride' ? "Bride's Side" : "Groom's Side"}</span>
         )}
         <h2 style={styles.heading}>RSVP</h2>
+
+        <div style={styles.nameRow}>
+          <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
+            First name *
+            <input
+              style={styles.input}
+              required
+              autoComplete="given-name"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+            />
+          </label>
+          <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
+            Last name *
+            <input
+              style={styles.input}
+              required
+              autoComplete="family-name"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+          </label>
+        </div>
 
         <label style={styles.label}>
           Phone *
@@ -156,20 +194,10 @@ export default function Embed() {
 
         {existing && !lookingUp && (
           <p style={styles.foundNote}>
-            We found your earlier RSVP and filled it in below. Make any changes
-            and submit again to update it.
+            Welcome back, {firstName.trim()} — we found your earlier RSVP and
+            filled it in below. Make any changes and submit again to update it.
           </p>
         )}
-
-        <label style={styles.label}>
-          Name *
-          <input
-            style={styles.input}
-            required
-            value={form.name}
-            onChange={(e) => update('name', e.target.value)}
-          />
-        </label>
 
         <label style={styles.label}>
           Will you attend? *
@@ -224,13 +252,73 @@ export default function Embed() {
   );
 }
 
+// The iframe's own document needs zeroed margins and full height, or the
+// browser's default 8px body margin shows as a pale border around the warm
+// background and gives the embed away as an iframe.
+function GlobalStyle() {
+  return (
+    <style jsx global>{`
+      html,
+      body,
+      #__next {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        background: #c28f30;
+      }
+      /* The dropdown arrow and caret default to blue-grey; warm them up. */
+      select,
+      input,
+      textarea {
+        accent-color: #8a6420;
+      }
+      input::placeholder,
+      textarea::placeholder {
+        color: rgba(74, 54, 23, 0.55);
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: 2px solid rgba(36, 26, 11, 0.55);
+        outline-offset: 1px;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+    `}</style>
+  );
+}
+
+// Palette lifted from the invitation: aged ochre/amber ground, near-black
+// ink, and warm gold accents, with a parchment tone for the input fields so
+// they sit on the background instead of punching white holes in it.
+const COLORS = {
+  ink: '#241a0b',
+  inkSoft: '#4a3617',
+  parchment: 'rgba(255, 248, 232, 0.88)',
+  gold: '#8a6420',
+  goldSoft: 'rgba(138, 100, 32, 0.45)',
+  cream: '#f7ecd5',
+};
+
+const SERIF = "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif";
+
 const styles = {
   wrap: {
-    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fontFamily: SERIF,
+    color: COLORS.ink,
     display: 'flex',
     justifyContent: 'center',
-    padding: '16px',
-    background: 'transparent',
+    padding: '20px 16px',
+    // Layered warm tones approximate the invitation's aged-wood wash without
+    // needing an image asset.
+    background: `
+      radial-gradient(ellipse at 50% 0%, rgba(226, 178, 84, 0.55), transparent 60%),
+      radial-gradient(ellipse at 20% 90%, rgba(150, 102, 30, 0.35), transparent 55%),
+      linear-gradient(165deg, #d3a03c 0%, #c28f30 45%, #a97a27 100%)
+    `,
+    minHeight: '100%',
   },
   card: {
     width: '100%',
@@ -239,63 +327,92 @@ const styles = {
     flexDirection: 'column',
     gap: 12,
   },
-  heading: { margin: 0, fontSize: 22 },
+  heading: {
+    margin: 0,
+    fontSize: 30,
+    fontWeight: 400,
+    letterSpacing: '0.06em',
+    color: COLORS.ink,
+  },
   badge: {
     alignSelf: 'flex-start',
     fontSize: 12,
-    fontWeight: 600,
-    padding: '3px 10px',
+    fontWeight: 400,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    padding: '3px 12px',
     borderRadius: 999,
-    background: '#f1e9ff',
-    color: '#6b3fa0',
+    background: 'rgba(36, 26, 11, 0.10)',
+    border: `1px solid ${COLORS.goldSoft}`,
+    color: COLORS.ink,
   },
-  sub: { margin: 0, color: '#555' },
-  hint: { margin: 0, fontSize: 12, color: '#777' },
+  sub: { margin: 0, color: COLORS.inkSoft, fontSize: 16 },
+  hint: { margin: 0, fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' },
   foundNote: {
     margin: 0,
     fontSize: 13,
-    padding: '8px 10px',
-    borderRadius: 8,
-    background: '#eef7ee',
-    color: '#2c6e2f',
+    padding: '9px 12px',
+    borderRadius: 6,
+    background: COLORS.parchment,
+    borderLeft: `3px solid ${COLORS.gold}`,
+    color: COLORS.ink,
   },
-  label: { display: 'flex', flexDirection: 'column', fontSize: 14, fontWeight: 600, gap: 4 },
+  label: {
+    display: 'flex',
+    flexDirection: 'column',
+    fontSize: 13,
+    fontWeight: 400,
+    letterSpacing: '0.04em',
+    gap: 4,
+    color: COLORS.ink,
+  },
+  nameRow: { display: 'flex', gap: 8 },
   phoneRow: { display: 'flex', gap: 8 },
   countrySelect: {
+    fontFamily: SERIF,
     fontSize: 15,
-    padding: '8px 6px',
-    borderRadius: 8,
-    border: '1px solid #ccc',
-    fontWeight: 400,
+    padding: '9px 6px',
+    borderRadius: 6,
+    border: `1px solid ${COLORS.goldSoft}`,
+    background: COLORS.parchment,
+    color: COLORS.ink,
     flex: '0 0 auto',
     maxWidth: 130,
   },
   input: {
+    fontFamily: SERIF,
     fontSize: 15,
-    padding: '8px 10px',
-    borderRadius: 8,
-    border: '1px solid #ccc',
+    padding: '9px 11px',
+    borderRadius: 6,
+    border: `1px solid ${COLORS.goldSoft}`,
+    background: COLORS.parchment,
+    color: COLORS.ink,
     fontWeight: 400,
   },
   button: {
-    marginTop: 8,
-    padding: '10px 16px',
-    borderRadius: 8,
+    fontFamily: SERIF,
+    marginTop: 10,
+    padding: '11px 16px',
+    borderRadius: 6,
     border: 'none',
-    background: '#111',
-    color: '#fff',
+    background: COLORS.ink,
+    color: COLORS.cream,
     fontSize: 15,
+    letterSpacing: '0.08em',
     cursor: 'pointer',
   },
   secondaryButton: {
+    fontFamily: SERIF,
     marginTop: 4,
     alignSelf: 'flex-start',
-    padding: '8px 14px',
-    borderRadius: 8,
-    border: '1px solid #ccc',
-    background: '#fff',
+    padding: '9px 15px',
+    borderRadius: 6,
+    border: `1px solid ${COLORS.ink}`,
+    background: 'transparent',
+    color: COLORS.ink,
     fontSize: 14,
+    letterSpacing: '0.04em',
     cursor: 'pointer',
   },
-  error: { color: '#c0392b', fontSize: 13, margin: 0 },
+  error: { color: '#7d1f12', fontSize: 13, margin: 0, fontWeight: 600 },
 };

@@ -45,9 +45,10 @@ export default function Admin() {
   const filteredRsvps = sideFilter === 'all' ? rsvps : rsvps.filter((r) => r.side === sideFilter);
 
   function exportCsv() {
-    const headers = ['Name', 'Phone', 'Side', 'Attending', 'Guests', 'Message', 'Submitted At', 'Last Updated'];
+    const headers = ['First Name', 'Last Name', 'Phone', 'Side', 'Attending', 'Guests', 'Message', 'Submitted At', 'Last Updated'];
     const rows = filteredRsvps.map((r) => [
-      r.name,
+      r.first_name || r.name || '',
+      r.last_name || '',
       r.phone || '',
       r.side,
       r.attending,
@@ -144,7 +145,8 @@ export default function Admin() {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Name</th>
+                <th style={styles.th}>First Name</th>
+                <th style={styles.th}>Last Name</th>
                 <th style={styles.th}>Phone</th>
                 <th style={styles.th}>Side</th>
                 <th style={styles.th}>Attending</th>
@@ -157,7 +159,8 @@ export default function Admin() {
             <tbody>
               {filteredRsvps.map((r) => (
                 <tr key={r.id}>
-                  <td style={styles.td}>{r.name}</td>
+                  <td style={styles.td}>{r.first_name || r.name}</td>
+                  <td style={styles.td}>{r.last_name || '—'}</td>
                   <td style={styles.td}>{r.phone || '—'}</td>
                   <td style={styles.td}>{r.side === 'bride' ? "Bride" : r.side === 'groom' ? "Groom" : '—'}</td>
                   <td style={styles.td}>{r.attending}</td>
