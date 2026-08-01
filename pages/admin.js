@@ -45,16 +45,16 @@ export default function Admin() {
   const filteredRsvps = sideFilter === 'all' ? rsvps : rsvps.filter((r) => r.side === sideFilter);
 
   function exportCsv() {
-    const headers = ['Name', 'Email', 'Phone', 'Side', 'Attending', 'Guests', 'Message', 'Submitted At'];
+    const headers = ['Name', 'Phone', 'Side', 'Attending', 'Guests', 'Message', 'Submitted At', 'Last Updated'];
     const rows = filteredRsvps.map((r) => [
       r.name,
-      r.email || '',
       r.phone || '',
       r.side,
       r.attending,
       r.guest_count,
       (r.message || '').replace(/\n/g, ' '),
       new Date(r.created_at).toLocaleString(),
+      r.updated_at ? new Date(r.updated_at).toLocaleString() : '',
     ]);
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
@@ -145,26 +145,26 @@ export default function Admin() {
             <thead>
               <tr>
                 <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
                 <th style={styles.th}>Phone</th>
                 <th style={styles.th}>Side</th>
                 <th style={styles.th}>Attending</th>
                 <th style={styles.th}>Guests</th>
                 <th style={styles.th}>Message</th>
                 <th style={styles.th}>Submitted</th>
+                <th style={styles.th}>Updated</th>
               </tr>
             </thead>
             <tbody>
               {filteredRsvps.map((r) => (
                 <tr key={r.id}>
                   <td style={styles.td}>{r.name}</td>
-                  <td style={styles.td}>{r.email}</td>
-                  <td style={styles.td}>{r.phone}</td>
+                  <td style={styles.td}>{r.phone || '—'}</td>
                   <td style={styles.td}>{r.side === 'bride' ? "Bride" : r.side === 'groom' ? "Groom" : '—'}</td>
                   <td style={styles.td}>{r.attending}</td>
                   <td style={styles.td}>{r.guest_count}</td>
                   <td style={styles.td}>{r.message}</td>
                   <td style={styles.td}>{new Date(r.created_at).toLocaleString()}</td>
+                  <td style={styles.td}>{r.updated_at ? new Date(r.updated_at).toLocaleString() : '—'}</td>
                 </tr>
               ))}
             </tbody>
