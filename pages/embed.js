@@ -163,9 +163,8 @@ export default function Embed({ side, eventKeys }) {
     <div style={styles.wrap}>
       <GlobalStyle />
       <form style={styles.card} onSubmit={handleSubmit}>
-        {side !== 'unspecified' && (
-          <span style={styles.badge}>{side === 'bride' ? "Bride's Side" : "Groom's Side"}</span>
-        )}
+        {/* The side still rides along on the submission and drives the admin
+            filters — it just isn't shown to the guest. */}
         <h2 style={styles.heading}>RSVP</h2>
 
         <div style={styles.nameRow}>
@@ -232,8 +231,8 @@ export default function Embed({ side, eventKeys }) {
           const answer = answerFor(key);
           const multi = eventKeys.length > 1;
           return (
-            <fieldset key={key} style={multi ? styles.eventBlock : styles.eventBlockPlain}>
-              {multi && <legend style={styles.eventLegend}>{event.label}</legend>}
+            <div key={key} style={multi ? styles.eventBlock : styles.eventBlockPlain}>
+              {multi && <div style={styles.eventLegend}>{event.label}</div>}
 
               <label style={styles.label}>
                 {multi ? 'Will you attend?' : 'Will you attend? *'}
@@ -266,7 +265,7 @@ export default function Embed({ side, eventKeys }) {
                   </select>
                 </label>
               )}
-            </fieldset>
+            </div>
           );
         })}
 
@@ -375,18 +374,6 @@ const styles = {
     letterSpacing: '0.06em',
     color: COLORS.ink,
   },
-  badge: {
-    alignSelf: 'flex-start',
-    fontSize: 12,
-    fontWeight: 400,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    padding: '3px 12px',
-    borderRadius: 999,
-    background: 'rgba(36, 26, 11, 0.10)',
-    border: `1px solid ${COLORS.goldSoft}`,
-    color: COLORS.ink,
-  },
   sub: { margin: 0, color: COLORS.inkSoft, fontSize: 16 },
   hint: { margin: 0, fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' },
   foundNote: {
@@ -413,14 +400,18 @@ const styles = {
   // doesn't need a box around it.
   eventBlock: {
     margin: 0,
-    padding: '12px 14px 14px',
+    padding: '14px 14px 16px',
     border: `1px solid ${COLORS.goldSoft}`,
     borderRadius: 6,
     background: 'rgba(255, 248, 232, 0.30)',
   },
   eventBlockPlain: { margin: 0, padding: 0, border: 'none' },
+  // A plain heading rather than a <legend>, which browsers draw straddling the
+  // fieldset border and which no amount of padding reliably reseats.
   eventLegend: {
-    padding: '0 6px',
+    margin: '0 0 10px',
+    paddingBottom: 8,
+    borderBottom: `1px solid ${COLORS.goldSoft}`,
     fontSize: 15,
     letterSpacing: '0.10em',
     textTransform: 'uppercase',
