@@ -80,7 +80,13 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
       // Without clearing the id here, coming back via "Edit my RSVP" would see
       // a stale id, skip rendering, and leave the guest with no token.
       if (window.turnstile && turnstileWidget.current !== null) {
-        window.turnstile.remove(turnstileWidget.current);
+        // Throws if the widget is already gone, and an exception escaping a
+        // cleanup function takes the unmount down with it.
+        try {
+          window.turnstile.remove(turnstileWidget.current);
+        } catch {
+          // Already removed; nothing to do.
+        }
       }
       turnstileWidget.current = null;
       setTurnstileToken('');
@@ -93,7 +99,11 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   function resetTurnstile() {
     setTurnstileToken('');
     if (window.turnstile && turnstileWidget.current !== null) {
-      window.turnstile.reset(turnstileWidget.current);
+      try {
+        window.turnstile.reset(turnstileWidget.current);
+      } catch {
+        // Widget went away mid-flight; the guest can reload if it matters.
+      }
     }
   }
 
