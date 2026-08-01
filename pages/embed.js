@@ -251,7 +251,7 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
 
   if (status === 'done') {
     return (
-      <div style={styles.wrap}>
+      <div className="rsvp-wrap" style={styles.wrap}>
         <GlobalStyle />
         <div style={styles.frame}>
           <div style={styles.doneBody}>
@@ -279,7 +279,7 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   }
 
   return (
-    <div style={styles.wrap}>
+    <div className="rsvp-wrap" style={styles.wrap}>
       <GlobalStyle />
       <form style={styles.frame} onSubmit={handleSubmit}>
         <div style={styles.header}>
@@ -296,7 +296,7 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
         <div style={styles.body}>
           {currentStep === 'identity' && (
             <>
-              <div style={styles.nameRow}>
+              <div className="rsvp-name-row" style={styles.nameRow}>
                 <label style={{ ...styles.label, flex: 1, minWidth: 0 }}>
                   First name *
                   <input
@@ -504,6 +504,19 @@ function GlobalStyle() {
         margin: 0 auto;
         display: block;
       }
+
+      /* Cloudflare's widget is a fixed 300px wide and can't be shrunk. On a
+         320px phone the frame's own padding leaves less than that, so trim the
+         padding rather than let the widget push a horizontal scrollbar. */
+      @media (max-width: 380px) {
+        .rsvp-wrap {
+          padding: 8px !important;
+        }
+        /* Two 140px-ish name fields side by side get uncomfortably narrow. */
+        .rsvp-name-row {
+          flex-direction: column;
+        }
+      }
     `}</style>
   );
 }
@@ -626,7 +639,10 @@ const styles = {
   phoneRow: { display: 'flex', gap: 8 },
   countrySelect: {
     fontFamily: SERIF,
-    fontSize: 15,
+    // 16px minimum on anything focusable: iOS Safari zooms the page in when a
+    // guest taps a control with smaller text, and inside an iframe that zoom
+    // is jarring and doesn't fully undo.
+    fontSize: 16,
     padding: '9px 6px',
     borderRadius: 6,
     border: `1px solid ${COLORS.goldSoft}`,
@@ -637,7 +653,8 @@ const styles = {
   },
   input: {
     fontFamily: SERIF,
-    fontSize: 15,
+    fontSize: 16, // see countrySelect: below 16px iOS zooms on focus
+
     padding: '9px 11px',
     borderRadius: 6,
     border: `1px solid ${COLORS.goldSoft}`,
