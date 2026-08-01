@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
 import { isBlankName } from '../lib/names';
 import { EVENTS, ATTENDING_OPTIONS, eventByKey, parseEventKeys } from '../lib/events';
+import { turnstileSiteKey } from '../lib/turnstile';
 
 const BLANK_ANSWER = { attending: 'yes', guestCount: 1 };
 
@@ -14,11 +15,13 @@ export function getServerSideProps({ query }) {
     props: {
       side: query.side === 'bride' || query.side === 'groom' ? query.side : 'unspecified',
       eventKeys: parseEventKeys(query.events),
+      // Public by design; the matching secret stays server-side.
+      turnstileSiteKey: turnstileSiteKey(),
     },
   };
 }
 
-export default function Embed({ side, eventKeys }) {
+export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [countryIso, setCountryIso] = useState(DEFAULT_COUNTRY);
@@ -30,6 +33,69 @@ export default function Embed({ side, eventKeys }) {
   const [existing, setExisting] = useState(false); // did we find a prior RSVP?
   const [lookingUp, setLookingUp] = useState(false);
   const [wasUpdate, setWasUpdate] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [website, setWebsite] = useState(''); // honeypot; real guests never see it
+  const turnstileRef = useRef(null);
+  const turnstileWidget = useRef(null);
+  const showForm = status !== 'done';
+
+  // Cloudflare's script is loaded in explicit mode and the widget rendered by
+  // hand, so it can be reset after a failed submit — a token is single-use, and
+  // reusing one turns a retry into a rejection.
+  useEffect(() => {
+    if (!siteKey) return undefined;
+
+    let cancelled = false;
+    function renderWidget() {
+      if (cancelled || !window.turnstile || !turnstileRef.current) return;
+      if (turnstileWidget.current !== null) return;
+      turnstileWidget.current = window.turnstile.render(turnstileRef.current, {
+        sitekey: siteKey,
+        callback: setTurnstileToken,
+        'expired-callback': () => setTurnstileToken(''),
+        'error-callback': () => setTurnstileToken(''),
+      });
+    }
+
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      const existingScript = document.querySelector('script[data-turnstile]');
+      if (existingScript) {
+        existingScript.addEventListener('load', renderWidget);
+      } else {
+        const script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.async = true;
+        script.defer = true;
+        script.dataset.turnstile = 'true';
+        script.addEventListener('load', renderWidget);
+        document.head.appendChild(script);
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      // The thank-you screen unmounts the form and with it the widget's node.
+      // Without clearing the id here, coming back via "Edit my RSVP" would see
+      // a stale id, skip rendering, and leave the guest with no token.
+      if (window.turnstile && turnstileWidget.current !== null) {
+        window.turnstile.remove(turnstileWidget.current);
+      }
+      turnstileWidget.current = null;
+      setTurnstileToken('');
+    };
+    // Keyed on whether the form is on screen, not on `status` — re-running for
+    // every idle/submitting/error transition would rebuild the widget mid-flow
+    // and throw away a token the guest already solved for.
+  }, [siteKey, showForm]);
+
+  function resetTurnstile() {
+    setTurnstileToken('');
+    if (window.turnstile && turnstileWidget.current !== null) {
+      window.turnstile.reset(turnstileWidget.current);
+    }
+  }
 
   function answerFor(key) {
     return answers[key] || BLANK_ANSWER;
@@ -124,6 +190,8 @@ export default function Embed({ side, eventKeys }) {
           responses,
           message,
           side,
+          turnstileToken,
+          website,
         }),
       });
       const data = await res.json();
@@ -133,6 +201,9 @@ export default function Embed({ side, eventKeys }) {
     } catch (err) {
       setStatus('error');
       setErrorMsg(err.message);
+      // Tokens are single-use, so a retry with the same one would be rejected
+      // even after the guest fixes whatever the error was.
+      resetTurnstile();
     }
   }
 
@@ -278,9 +349,30 @@ export default function Embed({ side, eventKeys }) {
           />
         </label>
 
+        {/* Honeypot. Hidden from guests and from screen readers, skipped by
+            tabbing, and never autofilled — anything in it came from a bot. */}
+        <div style={styles.honeypot} aria-hidden="true">
+          <label>
+            Website
+            <input
+              type="text"
+              tabIndex={-1}
+              autoComplete="off"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+            />
+          </label>
+        </div>
+
+        {siteKey && <div ref={turnstileRef} style={styles.turnstile} />}
+
         {status === 'error' && <p style={styles.error}>{errorMsg}</p>}
 
-        <button style={styles.button} type="submit" disabled={status === 'submitting'}>
+        <button
+          style={styles.button}
+          type="submit"
+          disabled={status === 'submitting' || (Boolean(siteKey) && !turnstileToken)}
+        >
           {status === 'submitting'
             ? 'Submitting…'
             : existing
@@ -464,4 +556,14 @@ const styles = {
     cursor: 'pointer',
   },
   error: { color: '#7d1f12', fontSize: 13, margin: 0, fontWeight: 600 },
+  // Off-screen rather than display:none — some bots skip hidden inputs, but
+  // most fill anything still in the layout.
+  honeypot: {
+    position: 'absolute',
+    left: '-9999px',
+    width: 1,
+    height: 1,
+    overflow: 'hidden',
+  },
+  turnstile: { marginTop: 4, minHeight: 65 },
 };

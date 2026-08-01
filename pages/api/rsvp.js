@@ -3,11 +3,28 @@ import { isValidAdminCookie, parseCookies } from '../../lib/auth';
 import { normalizePhone } from '../../lib/countries';
 import { isBlankName } from '../../lib/names';
 import { EVENT_KEYS, isValidAttending } from '../../lib/events';
+import { verifyTurnstile, clientIp } from '../../lib/turnstile';
 
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     try {
-      const { firstName, lastName, countryCode, number, responses, message, side } = req.body || {};
+      const { firstName, lastName, countryCode, number, responses, message, side, turnstileToken, website } =
+        req.body || {};
+
+      // Honeypot: a field hidden from real guests that automated form-fillers
+      // populate anyway. Costs nothing and needs no configuration. Answer 200
+      // so a bot can't tell it was caught and retry differently.
+      if (website) {
+        console.warn('Honeypot triggered, discarding submission.');
+        return res.status(200).json({ ok: true, id: null, updated: false });
+      }
+
+      const human = await verifyTurnstile(turnstileToken, clientIp(req));
+      if (!human) {
+        return res
+          .status(403)
+          .json({ error: "Couldn't verify you're human. Please reload the page and try again." });
+      }
 
       if (isBlankName(firstName) || isBlankName(lastName)) {
         return res.status(400).json({ error: 'First and last name are required.' });

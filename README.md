@@ -45,6 +45,31 @@ gh repo create rsvp-app --private --source=. --push
 2. Add `ADMIN_PASSWORD` = something only you know.
 3. Redeploy (Settings changes require a redeploy to take effect).
 
+## 4b. Turn on bot protection (Cloudflare Turnstile)
+
+Free, and works on any domain — the site does not need to be on Cloudflare.
+
+1. Go to https://dash.cloudflare.com → **Turnstile** → **Add widget**.
+2. Add your Vercel hostname (e.g. `rsvp-self.vercel.app`) under Domains.
+   Widget mode **Managed** is the right default.
+3. Copy the **Site Key** and **Secret Key**.
+4. In Vercel → Settings → Environment Variables, add:
+   - `TURNSTILE_SITE_KEY` = the site key
+   - `TURNSTILE_SECRET_KEY` = the secret key
+5. Redeploy.
+
+Both keys are read at request time, so rotating them later needs a redeploy
+but not a code change.
+
+**With no keys set the bot check is skipped and the form still works.** That is
+deliberate — an RSVP form that rejects every guest because an env var is missing
+is worse than a few spam rows you can delete. The trade-off is that a typo in the
+variable name silently disables the check, so confirm a widget actually appears
+on `/embed` once you have set them. To fail closed instead, change the
+`return true` in `turnstileEnabled()`'s branch in `lib/turnstile.js` to `false`.
+
+A hidden honeypot field runs regardless of configuration and needs no setup.
+
 ## 5. Embed the form in your invitation page
 
 Two things vary by URL:
