@@ -114,6 +114,29 @@ Answers are kept per ceremony, and a page only writes the ceremonies it asks
 about. Someone who RSVPs to all three and later resubmits from the marriage-only
 page keeps their haldi and mehendi answers intact.
 
+## Event details and calendar invites
+
+Dates, times, venues and addresses live in `EVENTS` in `lib/events.js` — one
+place, used by the form, the calendar invite and the map links.
+
+Each ceremony's step shows its date, time and venue, with the address linking
+out to Google Maps. On the last step, before submitting, guests can download an
+`.ics` invite covering the ceremonies they said yes to. It's offered again on
+the thank-you screen.
+
+Times are stored with an explicit `-04:00` offset. **North Carolina is on EDT in
+late August, not EST** — writing them as EST would put every invite an hour
+early. The `.ics` emits UTC, so it displays correctly in each guest's own
+timezone.
+
+Each event has a stable `UID`, so a guest who downloads the invite twice gets
+the entry updated rather than duplicated. Change a date or time in
+`lib/events.js` and anyone who re-downloads picks up the change — but calendars
+already added won't update on their own, so announce changes separately.
+
+Events default to a 4-hour duration (`durationMinutes`), since the times you
+gave are "onwards" rather than a fixed window.
+
 ## 6. View responses
 
 Go to `https://rsvp-self.vercel.app/admin`, enter your `ADMIN_PASSWORD`, and

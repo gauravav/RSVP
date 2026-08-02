@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
 import { isBlankName } from '../lib/names';
-import { ATTENDING_OPTIONS, eventByKey, parseEventKeys } from '../lib/events';
+import { ATTENDING_OPTIONS, eventByKey, mapsUrl, parseEventKeys } from '../lib/events';
 import { turnstileSiteKey } from '../lib/turnstile';
+import { downloadIcs } from '../lib/ics';
 
 const BLANK_ANSWER = { attending: 'yes', guestCount: 1 };
 
@@ -178,6 +179,10 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
     }
   }
 
+  // Only the ceremonies this page asked about and the guest said yes to — no
+  // point handing someone an invite to something they've declined.
+  const attendingKeys = eventKeys.filter((k) => answerFor(k).attending === 'yes');
+
   const canAdvance = currentStep === 'identity' ? identityComplete : true;
   const canSubmit = status !== 'submitting' && (!siteKey || Boolean(turnstileToken));
 
@@ -259,6 +264,15 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
             <p style={styles.sub}>
               {wasUpdate ? 'Your RSVP has been updated.' : 'Your RSVP has been recorded.'}
             </p>
+            {attendingKeys.length > 0 && (
+              <button
+                type="button"
+                style={styles.button}
+                onClick={() => downloadIcs(attendingKeys)}
+              >
+                Add to calendar
+              </button>
+            )}
             <p style={styles.hint}>
               Need to change something? Come back to this form and enter the same
               name and phone number — your answers will load and you can resubmit.
@@ -361,6 +375,24 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
             <>
               <div style={styles.stepTitle}>{eventByKey(currentStep).label}</div>
 
+              <div style={styles.eventDetails}>
+                <div style={styles.eventWhen}>
+                  {eventByKey(currentStep).dateLabel}
+                </div>
+                <div style={styles.eventWhen}>
+                  {eventByKey(currentStep).timeLabel} <span style={styles.tz}>(EDT)</span>
+                </div>
+                <div style={styles.eventVenue}>{eventByKey(currentStep).venue}</div>
+                <a
+                  href={mapsUrl(eventByKey(currentStep))}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={styles.eventAddress}
+                >
+                  {eventByKey(currentStep).address}
+                </a>
+              </div>
+
               <label style={styles.label}>
                 Will you attend?
                 <select
@@ -421,6 +453,30 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
                     onChange={(e) => setWebsite(e.target.value)}
                   />
                 </label>
+              </div>
+
+              {/* Offered before submitting, so a guest gets the invite whether
+                  or not they make it through the rest of the form. */}
+              <div style={styles.calendarBox}>
+                <div style={styles.calendarTitle}>Add to your calendar</div>
+                {attendingKeys.length > 0 ? (
+                  <>
+                    <p style={styles.calendarHint}>
+                      {attendingKeys.map((k) => eventByKey(k).label).join(', ')}
+                    </p>
+                    <button
+                      type="button"
+                      style={styles.secondaryButton}
+                      onClick={() => downloadIcs(attendingKeys)}
+                    >
+                      Download invite
+                    </button>
+                  </>
+                ) : (
+                  <p style={styles.calendarHint}>
+                    Say yes to a ceremony and its invite will appear here.
+                  </p>
+                )}
               </div>
 
               {siteKey && <div ref={turnstileRef} style={styles.turnstile} />}
@@ -702,4 +758,32 @@ const styles = {
     display: 'flex',
     justifyContent: 'center',
   },
+  eventDetails: {
+    margin: '0 0 16px',
+    padding: '10px 12px',
+    borderRadius: 6,
+    background: 'rgba(255, 248, 232, 0.45)',
+    borderLeft: `3px solid ${COLORS.gold}`,
+    fontSize: 14,
+    lineHeight: 1.45,
+  },
+  eventWhen: { color: COLORS.ink },
+  tz: { fontSize: 12, color: COLORS.inkSoft },
+  eventVenue: { marginTop: 6, fontWeight: 600, color: COLORS.ink },
+  eventAddress: { color: COLORS.gold, textDecoration: 'underline', fontSize: 13 },
+  calendarBox: {
+    marginTop: 16,
+    padding: '12px',
+    borderRadius: 6,
+    border: `1px dashed ${COLORS.goldSoft}`,
+    background: 'rgba(255, 248, 232, 0.30)',
+  },
+  calendarTitle: {
+    fontSize: 13,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    color: COLORS.ink,
+  },
+  calendarHint: { margin: '0 0 10px', fontSize: 13, color: COLORS.inkSoft },
 };
