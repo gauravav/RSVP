@@ -3,7 +3,7 @@ import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone } from '../lib/countries';
 import { isBlankName } from '../lib/names';
 import { ATTENDING_OPTIONS, eventByKey, mapsUrl, parseEventKeys } from '../lib/events';
 import { turnstileSiteKey } from '../lib/turnstile';
-import { downloadIcs } from '../lib/ics';
+import { calendarFileUrl, googleCalendarUrl } from '../lib/ics';
 
 const BLANK_ANSWER = { attending: 'yes', guestCount: 1 };
 
@@ -183,6 +183,22 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
   // point handing someone an invite to something they've declined.
   const attendingKeys = eventKeys.filter((k) => answerFor(k).attending === 'yes');
 
+  // Set after mount rather than during render: the server has no user agent,
+  // so deciding this during render would mismatch on hydration. Both options
+  // are always offered — this only chooses which one leads, so a wrong guess
+  // costs a guest nothing.
+  const [platform, setPlatform] = useState('other');
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    const iOS =
+      /iPad|iPhone|iPod/.test(ua) ||
+      // iPadOS reports itself as a Mac; touch points give it away.
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (/android/i.test(ua)) setPlatform('android');
+    else if (iOS) setPlatform('ios');
+    else setPlatform('other');
+  }, []);
+
   const canAdvance = currentStep === 'identity' ? identityComplete : true;
   const canSubmit = status !== 'submitting' && (!siteKey || Boolean(turnstileToken));
 
@@ -265,13 +281,10 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
               {wasUpdate ? 'Your RSVP has been updated.' : 'Your RSVP has been recorded.'}
             </p>
             {attendingKeys.length > 0 && (
-              <button
-                type="button"
-                style={styles.button}
-                onClick={() => downloadIcs(attendingKeys)}
-              >
-                Add to calendar
-              </button>
+              <div style={styles.calendarBox}>
+                <div style={styles.calendarTitle}>Add to your calendar</div>
+                <CalendarLinks keys={attendingKeys} platform={platform} />
+              </div>
             )}
             <p style={styles.hint}>
               Need to change something? Come back to this form and enter the same
@@ -463,18 +476,7 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
               <div style={styles.calendarBox}>
                 <div style={styles.calendarTitle}>Add to your calendar</div>
                 {attendingKeys.length > 0 ? (
-                  <>
-                    <p style={styles.calendarHint}>
-                      {attendingKeys.map((k) => eventByKey(k).label).join(', ')}
-                    </p>
-                    <button
-                      type="button"
-                      style={styles.secondaryButton}
-                      onClick={() => downloadIcs(attendingKeys)}
-                    >
-                      Download invite
-                    </button>
-                  </>
+                  <CalendarLinks keys={attendingKeys} platform={platform} />
                 ) : (
                   <p style={styles.calendarHint}>
                     Say yes to a ceremony and its invite will appear here.
@@ -521,6 +523,62 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
         </div>
       </form>
     </div>
+  );
+}
+
+// Both routes are always shown; the platform only decides which one leads.
+// Guessing wrong then costs a guest one extra tap rather than locking them out,
+// which matters because user-agent sniffing is never fully reliable.
+//
+// Every link opens with target="_blank". The form runs inside the host page's
+// iframe, and navigating that frame to a calendar file would replace the RSVP
+// form with it.
+function CalendarLinks({ keys, platform }) {
+  const fileLink = (
+    <a
+      href={calendarFileUrl(keys)}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={styles.calendarButton}
+    >
+      {platform === 'ios' ? 'Add to Apple Calendar' : 'Download invite (.ics)'}
+    </a>
+  );
+
+  const googleLinks = keys.map((k) => {
+    const event = eventByKey(k);
+    return (
+      <a
+        key={k}
+        href={googleCalendarUrl(event)}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={styles.calendarLink}
+      >
+        {keys.length > 1 ? `Google Calendar — ${event.label}` : 'Add to Google Calendar'}
+      </a>
+    );
+  });
+
+  return (
+    <>
+      <p style={styles.calendarHint}>
+        {keys.map((k) => eventByKey(k).label).join(', ')}
+      </p>
+      <div style={styles.calendarActions}>
+        {platform === 'android' ? (
+          <>
+            {googleLinks}
+            {fileLink}
+          </>
+        ) : (
+          <>
+            {fileLink}
+            {googleLinks}
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -790,4 +848,23 @@ const styles = {
     color: COLORS.ink,
   },
   calendarHint: { margin: '0 0 10px', fontSize: 13, color: COLORS.inkSoft },
+  calendarActions: { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' },
+  calendarButton: {
+    fontFamily: SERIF,
+    padding: '9px 18px',
+    borderRadius: 6,
+    border: `1px solid ${COLORS.ink}`,
+    background: 'transparent',
+    color: COLORS.ink,
+    fontSize: 14,
+    letterSpacing: '0.04em',
+    cursor: 'pointer',
+    textDecoration: 'none',
+    display: 'inline-block',
+  },
+  calendarLink: {
+    fontSize: 13,
+    color: COLORS.gold,
+    textDecoration: 'underline',
+  },
 };
