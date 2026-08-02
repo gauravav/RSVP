@@ -382,6 +382,9 @@ export default function Embed({ side, eventKeys, turnstileSiteKey: siteKey }) {
                 <div style={styles.eventWhen}>
                   {eventByKey(currentStep).timeLabel} <span style={styles.tz}>(EDT)</span>
                 </div>
+                {eventByKey(currentStep).note && (
+                  <div style={styles.eventNote}>{eventByKey(currentStep).note}</div>
+                )}
                 <div style={styles.eventVenue}>{eventByKey(currentStep).venue}</div>
                 <a
                   href={mapsUrl(eventByKey(currentStep))}
@@ -769,6 +772,7 @@ const styles = {
   },
   eventWhen: { color: COLORS.ink },
   tz: { fontSize: 12, color: COLORS.inkSoft },
+  eventNote: { marginTop: 2, fontWeight: 600, color: COLORS.gold },
   eventVenue: { marginTop: 6, fontWeight: 600, color: COLORS.ink },
   eventAddress: { color: COLORS.gold, textDecoration: 'underline', fontSize: 13 },
   calendarBox: {
